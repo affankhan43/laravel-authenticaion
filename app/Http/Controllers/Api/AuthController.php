@@ -3,10 +3,12 @@ namespace App\Http\Controllers\Api;
 use Illuminate\Http\Request;
 use App\User;
 use App\User_verifications;
-use JWTAuth;
+use Tymon\JWTAuth\JWTAuth;
 use Tymon\JWTAuth\Exceptions\JWTException;
+use App\Http\Requests\RegisterRequest;
+use App\Http\Requests\LoginRequest;
 use App\Http\Controllers\Controller;
-use Validator, DB, Hash, Mail;
+use Validator, DB, Hash;
 use Illuminate\Support\Facades\Password;
 class AuthController extends Controller
 {
@@ -20,7 +22,7 @@ class AuthController extends Controller
 		$this->user_verifications = $user_verifications;
 	}
 
-    public function register(Request $request){
+	public function register(Request $request){
 		$credentials = $request->only('name', 'email', 'password');
 		$rules = [
 			'name' => 'required|max:255',
@@ -33,9 +35,9 @@ class AuthController extends Controller
 		}
 		$user = $this->user->create(['name'=>$request->name,'email'=>$request->email,'password'=>Hash::make($request->password)]);
 		$verification_code = str_random(30); //Generate verification code
-        $this->user_verifications->create(['user_id'=>$user->id,'token'=>$verification_code]);
-        return response()->json(['success'=> true, 'message'=> 'Thanks for signing up!']);
-    }
+		$this->user_verifications->create(['user_id'=>$user->id,'token'=>$verification_code]);
+		return response()->json(['success'=> true, 'message'=> 'Thanks for signing up!']);
+	}
 
 	public function verifyUser($verification_code){
 		$check = $this->user_verifications->where('token',$verification_code)->first();
@@ -54,28 +56,23 @@ class AuthController extends Controller
 		return response()->json(['success'=> false, 'error'=> "Verification code is invalid."]);
 	}
 
-	public function login(Request $request){
+	public function login(LoginRequest $request){
+		// get user credentials: email, password
 		$credentials = $request->only('email', 'password');
-		$rules = [
-			'email' => 'required|email',
-			'password' => 'required',
-		];
-		if($validator->fails()) {
-			return response()->json(['success'=> false, 'error'=> $validator->messages()], 401);
-		}
 		$credentials['is_verified'] = 1;
-		try {
-            // attempt to verify the credentials and create a token for the user
-            if (! $token = JWTAuth::attempt($credentials)) {
-                return response()->json(['success' => false, 'error' => 'We cant find an account with this credentials. Please make sure you entered the right information and you have verified your email address.'], 404);
-            }
-        } catch (JWTException $e) {
-            // something went wrong whilst attempting to encode the token
-            return response()->json(['success' => false, 'error' => 'Failed to login, please try again.'], 500);
-        }
-        // all good so return the token
-        return response()->json(['success' => true, 'data'=> [ 'token' => $token ]], 200);
-    }
+		$token = null;
+		try{
+			$token = $this->jwtauth->attempt($credentials);
+			if(!$token){
+				return response()->json(['invalid_email_or_password'], 422);
+			}
+		}
+		catch (JWTAuthException $e) {
+			return response()->json(['failed_to_create_token'], 500);
+		}
+		$user = $this->jwtauth->setToken($token)->toUser();
+		return response()->json(['id'=>$user->id,'email'=>$user->email,'name'=>$user->name,'token'=>$token]);
+	}
 
 	public function logout(Request $request) {
 		$this->validate($request, ['token' => 'required']);
